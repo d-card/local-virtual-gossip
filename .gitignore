@@ -1,0 +1,52 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+*.pyo
+*.pyd
+*.pdb
+*.egg-info/
+.python-venv/
+python-venv/
+venv/
+.env
+.env.*
+.DS_Store
+# Jupyter
+.ipynb_checkpoints
+# Test output
+htmlcov/
+.coverage
+.tox/
+.cache/
+.pytest_cache/
+# Logs
+*.log
+
+# Go
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+# Output of the go coverage tool, specifically when used with LiteIDE
+*.cov
+# Dependency directories (remove the comment below to include it if you vendored dependencies)
+vendor/
+# Go workspace file
+*.code-workspace
+# Go build cache
+*.modcache/
+# GoLand project files
+.idea/
+# Go race detector files
+*.race
+# Go build output
+bin/ 
+
+identities/
