@@ -67,13 +67,29 @@ def run():
     # Delete all logs before starting
     os.system('rm -f logs/*.log')
 
-    # Load ping data and select nodes
+    # Load ping data
     ping_data = pings_csv_to_dict("../pings.csv")
-    all_nodes = sorted(set(ping_data.keys()) | {d for v in ping_data.values() for d in v})
-    percentage = 0.1
-    num_nodes = max(2, int(len(all_nodes) * percentage))
-    selected_nodes = sorted(random.sample(all_nodes, num_nodes))
-    print(f"Selected nodes: {selected_nodes}")
+    
+    # Read selected nodes from participants.txt
+    selected_nodes = []
+    try:
+        with open("participants.txt", "r") as file:
+            for line in file:
+                line = line.strip()
+                if line:  # Skip empty lines
+                    selected_nodes.append(int(line))
+    except FileNotFoundError:
+        print("Error: participants.txt not found")
+        return
+    except ValueError as e:
+        print(f"Error parsing participants.txt: {e}")
+        return
+    
+    if not selected_nodes:
+        print("Error: No nodes found in participants.txt")
+        return
+    
+    print(f"Selected nodes from participants.txt: {selected_nodes}")
 
     # Get peer IDs for all possible nodes
     peer_ids = get_peer_ids(max(selected_nodes))
