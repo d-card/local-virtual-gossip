@@ -50,3 +50,4 @@ vendor/
 bin/ 
 
 identities/
+participants.txt
