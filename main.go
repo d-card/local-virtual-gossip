@@ -42,7 +42,7 @@ func generateKeys(nodeNum *int) {
 		var priv crypto.PrivKey
 		var err error
 		if _, err := os.Stat(filepath.Join(identityDir, fmt.Sprintf("node%d.key", i))); err == nil {
-			priv, err = loadOrCreateIdentity(filepath.Join(identityDir, fmt.Sprintf("node%d.key", i)), i)
+			priv, err = loadOrCreateIdentity(filepath.Join(identityDir, fmt.Sprintf("node%d.key", i)))
 			if err != nil {
 				log.Fatal(err)
 			}
@@ -76,7 +76,7 @@ func generateKeys(nodeNum *int) {
 	}
 }
 
-func loadOrCreateIdentity(path string, nodeNum int) (crypto.PrivKey, error) {
+func loadOrCreateIdentity(path string) (crypto.PrivKey, error) {
 	// Try to load existing identity
 	if data, err := ioutil.ReadFile(path); err == nil {
 		return crypto.UnmarshalPrivateKey(data)
@@ -124,7 +124,7 @@ func main() {
 
 	// Load or create identity
 	identityFile := filepath.Join(identityDir, fmt.Sprintf("node%d.key", *nodeNum))
-	privKey, err := loadOrCreateIdentity(identityFile, *nodeNum)
+	privKey, err := loadOrCreateIdentity(identityFile)
 	if err != nil {
 		log.Fatal(err)
 	}
