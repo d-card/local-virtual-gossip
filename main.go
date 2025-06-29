@@ -39,10 +39,19 @@ func generateKeys(nodeNum *int) {
 
 	// Generate keys for each node
 	for i := 0; i <= *nodeNum; i++ {
+		var priv crypto.PrivKey
+		var err error
+		if _, err := os.Stat(filepath.Join(identityDir, fmt.Sprintf("node%d.key", i))); err == nil {
+			priv, err = loadOrCreateIdentity(filepath.Join(identityDir, fmt.Sprintf("node%d.key", i)), i)
+			if err != nil {
+				log.Fatal(err)
+			}
+		} else {
 		// Generate new identity
-		priv, _, err := crypto.GenerateEd25519Key(rand.Reader)
-		if err != nil {
-			log.Fatal(err)
+			priv, _, err = crypto.GenerateEd25519Key(rand.Reader)
+			if err != nil {
+				log.Fatal(err)
+			}
 		}
 
 		// Get the peer ID
