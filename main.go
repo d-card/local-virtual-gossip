@@ -149,7 +149,7 @@ func main() {
 	}
 
 	// Create a new GossipSub instance
-	ps, err := pubsub.NewGossipSub(context.Background(), h)
+	ps, err := pubsub.NewGossipSub(context.Background(), h, pubsub.HIERARCHICAL_GOSSIP)
 	if err != nil {
 		log.Fatal(err)
 	}
