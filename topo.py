@@ -21,7 +21,6 @@ class LinuxRouter(Node):
         self.cmd('sysctl net.ipv4.ip_forward=0')
         super(LinuxRouter, self).terminate()
 
-# Load ping data from CSV
 def pings_csv_to_dict(filename: str) -> dict[int, dict[int, tuple[float, float]]]:
     data = {}
     with open(filename, "r") as file:
@@ -37,20 +36,28 @@ def pings_csv_to_dict(filename: str) -> dict[int, dict[int, tuple[float, float]]
             data[source][destination] = (ping_avg, ping_std_dev)
     return data
 
+def get_ip_for_node(node: int) -> tuple[str, str]:
+    """Generate IP address for a node, handling octets > 255"""
+    subnet = (node // 255) + 1
+    octet = (node % 255) + 1
+    return f"10.{subnet}.{octet}.1/24", f"10.{subnet}.{octet}.2/24"
+
 class GossipSubTopo(Topo):
     def build(self, selected_nodes):
-        # Create hosts
         for node in selected_nodes:
-            self.addHost(f'h{node}', ip=f'10.0.{node}.1/24')
-        # Create a router
-        self.addNode('r1', cls=LinuxRouter, ip=f'10.0.{selected_nodes[0]}.2/24')
-        # Add links
+            host_ip, _ = get_ip_for_node(node)
+            self.addHost(f'h{node}', ip=host_ip)
+        
+        # Router gets IP from first node
+        _, router_ip = get_ip_for_node(selected_nodes[0])
+        self.addNode('r1', cls=LinuxRouter, ip=router_ip)
+        
         for node in selected_nodes:
-            self.addLink(f'h{node}', 'r1', intfName=f'h{node}-eth0', params1={'ip': f'10.0.{node}.1/24'})
+            host_ip, _ = get_ip_for_node(node)
+            self.addLink(f'h{node}', 'r1', intfName=f'h{node}-eth0', params1={'ip': host_ip})
 
 def get_peer_ids(max_node):
-    # Generate new keys and get peer IDs for all possible nodes
-    result = subprocess.run(['go', 'run', 'main.go', '-generate', '-node', str(max_node)], capture_output=True, text=True)
+    result = subprocess.run(['bin/node', '-generate', '-node', str(max_node)], capture_output=True, text=True)
     if result.returncode != 0:
         print("Error generating keys:", result.stderr)
         return None
@@ -62,114 +69,123 @@ def get_peer_ids(max_node):
             peer_ids[node_num] = peer_id
     return peer_ids
 
-
 def run():
-    # Delete all logs before starting
+    print("[INFO] Cleaning logs...")
     os.system('rm -f logs/*.log')
+    os.makedirs('logs', exist_ok=True)
 
-    # Load ping data
+    print("[INFO] Loading ping data...")
     ping_data = pings_csv_to_dict("../pings.csv")
-    
-    # Read selected nodes from participants.txt
+
     selected_nodes = []
+    print("[INFO] Reading participants.txt...")
     try:
         with open("participants.txt", "r") as file:
             for line in file:
                 line = line.strip()
-                if line:  # Skip empty lines
+                if line:
                     selected_nodes.append(int(line))
-    except FileNotFoundError:
-        print("Error: participants.txt not found")
+    except Exception as e:
+        print("Error reading participants.txt:", e)
         return
-    except ValueError as e:
-        print(f"Error parsing participants.txt: {e}")
-        return
-    
-    if not selected_nodes:
-        print("Error: No nodes found in participants.txt")
-        return
-    
-    print(f"Selected nodes from participants.txt: {selected_nodes}")
 
-    # Get peer IDs for all possible nodes
+    if not selected_nodes:
+        print("No nodes selected.")
+        return
+
+    print(f"[INFO] Selected nodes: {selected_nodes}")
+
+    print("[INFO] Generating peer IDs...")
     peer_ids = get_peer_ids(max(selected_nodes))
     if not peer_ids:
         print("Failed to get peer IDs")
         return
 
-    # Build reduced ping matrix for selected nodes
+    print("[INFO] Building delay matrix...")
     delays = {}
     for i in selected_nodes:
         for j in selected_nodes:
             if i != j and i in ping_data and j in ping_data[i]:
-                # Use ping average as delay in ms (rounded)
                 delays[(i, j)] = int(round(ping_data[i][j][0]))
             elif i != j:
-                # Default delay if missing
                 delays[(i, j)] = 20
 
+    print("[INFO] Shuffling and initializing topology...")
     random.shuffle(selected_nodes)
     topo = GossipSubTopo(selected_nodes)
     net = Mininet(topo=topo)
     net.start()
 
-    # Map node number to its index for interface and marking
-    node_to_idx = {node: idx for idx, node in enumerate(selected_nodes)}
-
-    # Configure router interfaces
+    print("[INFO] Setting up router interfaces...")
     r1 = net['r1']
     for idx, node in enumerate(selected_nodes[1:], 1):
-        r1.cmd(f'ip addr add 10.0.{node}.2/24 dev r1-eth{idx}')
+        _, router_ip = get_ip_for_node(node)
+        r1.cmd(f'ip addr add {router_ip} dev r1-eth{idx}')
 
-    # Add routes
-    for idx, node in enumerate(selected_nodes):
-        net[f'h{node}'].cmd(f'ip route add default via 10.0.{node}.2')
+    print("[INFO] Setting up default routes...")
+    for node in selected_nodes:
+        _, router_ip = get_ip_for_node(node)
+        router_ip_base = router_ip.split('/')[0]
+        net[f'h{node}'].cmd(f'ip route add default via {router_ip_base}')
 
-    # Remove all per-router-band tc/iptables logic
-
-    # Apply scalable per-destination delays on each host's interface using HTB + netem
+    print("[INFO] Applying per-host delay configuration...")
     for i in selected_nodes:
+        print(f"[INFO] Setting up delay for node {i}...")
         host = net[f'h{i}']
         intf = f'h{i}-eth0'
         host.cmd(f'tc qdisc del dev {intf} root || true')
-        # Add HTB root qdisc
         host.cmd(f'tc qdisc add dev {intf} root handle 1: htb default 1')
-        # Add a parent class (for default traffic)
         host.cmd(f'tc class add dev {intf} parent 1: classid 1:1 htb rate 1000Mbps')
-        for j_idx, j in enumerate(selected_nodes):
+        class_counter = 2
+        for j in selected_nodes:
             if i == j:
                 continue
-            classid = j_idx + 2  # 1:1 is default, so start at 1:2
             delay = delays[(i, j)]
-            # Add a class for this destination
-            host.cmd(f'tc class add dev {intf} parent 1: classid 1:{classid} htb rate 1000Mbps')
-            # Attach netem to this class
-            host.cmd(f'tc qdisc add dev {intf} parent 1:{classid} handle {classid}0: netem delay {delay}ms')
-            # Add a filter to match destination IP
-            host.cmd(f'tc filter add dev {intf} protocol ip parent 1: prio 1 u32 match ip dst 10.0.{j}.1 flowid 1:{classid}')
+            host_ip, _ = get_ip_for_node(j)
+            host_ip_base = host_ip.split('/')[0]
+            host.cmd(f'tc class add dev {intf} parent 1: classid 1:{class_counter} htb rate 1000Mbps')
+            host.cmd(f'tc qdisc add dev {intf} parent 1:{class_counter} handle {class_counter}0: netem delay {delay}ms')
+            host.cmd(f'tc filter add dev {intf} protocol ip parent 1: prio 1 u32 match ip dst {host_ip_base} flowid 1:{class_counter}')
+            class_counter += 1
 
-    os.system('mkdir -p logs')
-    time.sleep(5)
+    print("[INFO] Delay configuration complete. Waiting before launch...")
+    time.sleep(2)
 
+    print("[INFO] Launching node processes...")
     min_node = min(selected_nodes)
-    # Start all nodes with their peer connections
-    for idx, i in enumerate(selected_nodes):
+    log_files = {}
+    for i in selected_nodes:
+        log_path = f'logs/node{i}.log'
+        log_file = open(log_path, 'w', buffering=1)  # Line-buffered
+        log_files[i] = log_file
+
         peer_list = []
         for j in selected_nodes:
             if j != i:
                 peer_port = 4000 + j
-                peer_list.append(f"/ip4/10.0.{j}.1/tcp/{peer_port}/p2p/{peer_ids[j]}")
+                host_ip, _ = get_ip_for_node(j)
+                host_ip_base = host_ip.split('/')[0]
+                peer_list.append(f"/ip4/{host_ip_base}/tcp/{peer_port}/p2p/{peer_ids[j]}")
         peers_arg = ','.join(peer_list)
         node_port = 4000 + i
-        net[f'h{i}'].cmd(f'go run main.go -port {node_port} -node {i} -minnode {min_node} -peers "{peers_arg}" > logs/node{i}.log 2>&1 &')
-        print(f"Started node {i}")
 
-    print("\nTo view logs, use: tail -f logs/node<N>.log")
+        print(f"[INFO] Starting node {i} on port {node_port}...")
+        net[f'h{i}'].popen(
+            ['./bin/node', '-port', str(node_port), '-node', str(i), '-minnode', str(min_node), '-peers', peers_arg],
+            stdout=log_file,
+            stderr=subprocess.STDOUT
+        )
+
+    print("\n[INFO] All nodes launched. View logs with:")
+    print("tail -f logs/node<N>.log")
     print(f"Example: tail -f logs/node{selected_nodes[0]}.log\n")
 
     CLI(net)
     net.stop()
 
+    for f in log_files.values():
+        f.close()
+
 if __name__ == '__main__':
     setLogLevel('info')
-    run() 
+    run()
