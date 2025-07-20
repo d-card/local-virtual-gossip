@@ -7,13 +7,9 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
-	mathrand "math/rand"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"strings"
-	"sync"
-	"syscall"
 	"time"
 
 	"github.com/libp2p/go-libp2p"
@@ -25,42 +21,13 @@ import (
 
 const topicName = "gossipsub-test"
 
-// Global log buffer and coordination
-var (
-	logBuffer            []string
-	receivedFirstMessage bool
-	flushOnce            sync.Once
-	logLock              sync.Mutex
-)
-
 func logWithTime(format string, a ...interface{}) {
 	timestamp := time.Now().Format(time.RFC3339Nano)
 	line := fmt.Sprintf("[%s] %s", timestamp, fmt.Sprintf(format, a...))
-
-	logLock.Lock()
-	defer logLock.Unlock()
-	logBuffer = append(logBuffer, line)
-	fmt.Print(line) // Optional: print to stdout for real-time debug
+	fmt.Print(line) 
 }
 
-func flushLogToDisk(nodeNum int) {
-	logLock.Lock()
-	defer logLock.Unlock()
 
-	os.MkdirAll("logs", 0755)
-	logPath := fmt.Sprintf("logs/node%d.log", nodeNum)
-	f, err := os.Create(logPath)
-	if err != nil {
-		fmt.Printf("Error creating log file: %v\n", err)
-		return
-	}
-	defer f.Close()
-
-	for _, line := range logBuffer {
-		f.WriteString(line)
-	}
-	logWithTime("Flushed %d log lines to %s\n", len(logBuffer), logPath)
-}
 
 func handleMessages(sub *pubsub.Subscription, nodeNum int) {
 	for {
@@ -69,16 +36,6 @@ func handleMessages(sub *pubsub.Subscription, nodeNum int) {
 			log.Fatal(err)
 		}
 		logWithTime("Received message from %s: %s\n", msg.ReceivedFrom, string(msg.Data))
-
-		if !receivedFirstMessage {
-			receivedFirstMessage = true
-			go func() {
-				time.Sleep(5 * time.Second)
-				flushOnce.Do(func() {
-					flushLogToDisk(nodeNum)
-				})
-			}()
-		}
 	}
 }
 
@@ -93,32 +50,14 @@ func generateKeys(nodeNum *int) {
 		var err error
 		path := filepath.Join(identityDir, fmt.Sprintf("node%d.key", i))
 
-		if _, err := os.Stat(path); err == nil {
-			priv, err = loadOrCreateIdentity(path)
-			if err != nil {
-				log.Fatal(err)
-			}
-		} else {
-			priv, _, err = crypto.GenerateEd25519Key(rand.Reader)
-			if err != nil {
-				log.Fatal(err)
-			}
-		}
+		priv, err = loadOrCreateIdentity(path)
 
 		peerID, err := peer.IDFromPrivateKey(priv)
 		if err != nil {
 			log.Fatal(err)
 		}
 
-		data, err := crypto.MarshalPrivateKey(priv)
-		if err != nil {
-			log.Fatal(err)
-		}
-		if err := ioutil.WriteFile(path, data, 0644); err != nil {
-			log.Fatal(err)
-		}
-
-		fmt.Printf("Node %d peer ID: %s\n", i, peerID)
+		fmt.Printf("%d:%s\n", i, peerID)
 	}
 }
 
@@ -180,7 +119,7 @@ func main() {
 		logWithTime("Node %d Full address: %s\n", *nodeNum, fullAddr)
 	}
 
-	ps, err := pubsub.NewGossipSub(context.Background(), h, pubsub.HIERARCHICAL_GOSSIP)
+	ps, err := pubsub.NewGossipSub(context.Background(), h, pubsub.GOSSIPSUB)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -218,22 +157,6 @@ func main() {
 			}
 			if err := h.Connect(context.Background(), *peerInfo); err != nil {
 				logWithTime("Error connecting to peer %s: %v\n", addr, err)
-				// Start retry goroutine for failed connections
-				go func(peerInfo peer.AddrInfo, addr string) {
-					for i := 0; i < 3; i++ {
-						baseBackoff := time.Duration(i+1) * 5 * time.Second
-						// Add jitter: random delay between 50% and 150% of base backoff
-						jitter := time.Duration(mathrand.Intn(int(baseBackoff))) + baseBackoff/2
-						time.Sleep(jitter)
-						if err := h.Connect(context.Background(), peerInfo); err == nil {
-							logWithTime("Node %d successfully reconnected to peer: %s\n", *nodeNum, peerInfo.ID)
-							return
-						} else {
-							logWithTime("Node %d retry %d failed for peer %s: %v\n", *nodeNum, i+1, peerInfo.ID, err)
-						}
-					}
-					logWithTime("Node %d failed to connect to peer %s after 5 retries\n", *nodeNum, peerInfo.ID)
-				}(*peerInfo, addr)
 				continue
 			}
 			logWithTime("Node %d connected to peer: %s\n", *nodeNum, peerInfo.ID)
@@ -241,21 +164,20 @@ func main() {
 	}
 
 	if *port == 4000+*minNum {
-		time.Sleep(30 * time.Second)
-		err = topic.Publish(context.Background(), []byte("Hello from GossipSub!"))
+		time.Sleep(60 * time.Second)
+		err = topic.Publish(context.Background(), []byte("Hello world!"))
 		if err != nil {
 			log.Fatal(err)
 		}
 		logWithTime("Node %d published message to topic\n", *nodeNum)
+		time.Sleep(5 * time.Second) // Allow time for message to propagate
+		logWithTime("Node %d shutting down\n", *nodeNum)
+		os.Exit(0)
 	}
 
-	// Handle shutdown
-	ch := make(chan os.Signal, 1)
-	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
-	<-ch
-	logWithTime("Node %d received shutdown signal\n", *nodeNum)
 
-	flushOnce.Do(func() {
-		flushLogToDisk(*nodeNum)
-	})
+	// Wait for all messages to be processed before shutting down
+	time.Sleep(120 * time.Second)
+	logWithTime("Node %d shutting down\n", *nodeNum)
+	os.Exit(0)
 }

@@ -4,6 +4,7 @@ import random
 import csv
 import os
 
+
 def pings_csv_to_dict(filename: str) -> dict[int, dict[int, tuple[float, float]]]:
     data = {}
     with open(filename, "r") as file:
@@ -19,28 +20,32 @@ def pings_csv_to_dict(filename: str) -> dict[int, dict[int, tuple[float, float]]
             data[source][destination] = (ping_avg, ping_std_dev)
     return data
 
+
 def randomize_participants():
-    PERCENTAGE = 0.1
+    PERCENTAGE = 0.5
     MIN_NODES = 2
     OUTPUT_FILE = "participants.txt"
-    
+
     ping_data = pings_csv_to_dict("../pings.csv")
-    all_nodes = sorted(set(ping_data.keys()) | {d for v in ping_data.values() for d in v})
-    
+    all_nodes = sorted(
+        set(ping_data.keys()) | {d for v in ping_data.values() for d in v}
+    )
+
     num_nodes = max(MIN_NODES, int(len(all_nodes) * PERCENTAGE))
-    
+
     if num_nodes > len(all_nodes):
         num_nodes = len(all_nodes)
-    
+
     selected_nodes = sorted(random.sample(all_nodes, num_nodes))
-    
+
     try:
-        with open(OUTPUT_FILE, 'w') as f:
+        with open(OUTPUT_FILE, "w") as f:
             for node in selected_nodes:
-                f.write(f"{node}\n")        
-        
+                f.write(f"{node}\n")
+
     except Exception as e:
         print(f"Error writing to output file: {e}")
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     randomize_participants()
